@@ -1,6 +1,6 @@
 const { addonBuilder, getRouter } = require("stremio-addon-sdk");
 const express = require("express");
-const { getCatalog, getMeta, getStreams } = require("./scraper");
+const { getCatalog, getMeta, getStreams } = require("../scraper");
 
 const manifest = {
     id: "org.historicalpoint.urdu",
@@ -46,6 +46,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
 });
 
 const app = express();
+app.get("/", (req, res) => res.redirect("/manifest.json"));
 app.use(getRouter(builder.getInterface()));
 
 module.exports = app;
