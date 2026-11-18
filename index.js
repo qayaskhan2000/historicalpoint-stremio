@@ -1,4 +1,5 @@
-const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
+const { addonBuilder, getRouter } = require("stremio-addon-sdk");
+const express = require("express");
 const { getCatalog, getMeta, getStreams } = require("./scraper");
 
 const manifest = {
@@ -44,13 +45,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     return { streams: [] };
 });
 
-const PORT = process.env.PORT || 7000;
-serveHTTP(builder.getInterface(), { port: PORT });
+const app = express();
+app.use(getRouter(builder.getInterface()));
 
-process.on("uncaughtException", (err) => {
-    console.error("Prevented crash:", err.message);
-});
-process.on("unhandledRejection", (reason) => {
-    console.error("Prevented promise crash:", reason);
-});
-
+module.exports = app;
