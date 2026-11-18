@@ -30,8 +30,13 @@ const manifest = {
     ]
 };
 
-const encodeId = (url) => "hp_" + Buffer.from(url).toString("base64url");
-const decodeId = (id) => Buffer.from(id.replace("hp_", ""), "base64url").toString("utf8");
+function encodeId(url) {
+    return "hp_" + Buffer.from(url).toString("base64url");
+}
+
+function decodeId(id) {
+    return Buffer.from(id.replace("hp_", ""), "base64url").toString("utf8");
+}
 
 async function fetchHtml(url) {
     const res = await fetch(url, {
@@ -43,15 +48,15 @@ async function fetchHtml(url) {
 }
 
 function getMetaTag(html, property) {
-    const regex = new RegExp(`<meta[^>]+(?:property|name)=["']${property}["'][^>]+content=["']([^"']+)["']`, "i");
+    const regex = new RegExp("<meta[^>]+(?:property|name)=[\"']" + property + "[\"'][^>]+content=[\"']([^\"']+)[\"']", "i");
     const match = html.match(regex);
-    return match ? match[1] : "";
+    return match && match[1] ? match[1] : "";
 }
 
 async function getCatalog() {
     const metas = await Promise.all(
         SERIES_LIST.map(async (series) => {
-            const pageUrl = `${BASE_URL}/${series.slug}/`;
+            const pageUrl = BASE_URL + "/" + series.slug + "/";
             try {
                 const html = await fetchHtml(pageUrl);
                 const poster = getMetaTag(html, "og:image");
@@ -61,10 +66,10 @@ async function getCatalog() {
                     id: encodeId(pageUrl),
                     type: "series",
                     name: series.title,
-                    poster,
-                    description
+                    poster: poster,
+                    description: description
                 };
-            } catch {
+            } catch (e) {
                 return {
                     id: encodeId(pageUrl),
                     type: "series",
@@ -81,7 +86,7 @@ async function getMeta(seriesId) {
     const html = await fetchHtml(seriesUrl);
 
     const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
-    const title = h1Match ? h1Match[1].replace(/<[^>]+>/g, "").trim() : "Series";
+    const title = h1Match && h1Match[1] ? h1Match[1].replace(/<[^>]+>/g, "").trim() : "Series";
     const poster = getMetaTag(html, "og:image");
     const description = getMetaTag(html, "og:description");
 
@@ -95,18 +100,18 @@ async function getMeta(seriesId) {
         const href = match[1];
         const linkText = match[2].replace(/<[^>]+>/g, "").trim();
 
-        if (seenUrls.has(href)) continue;
+        if (!href || seenUrls.has(href)) continue;
 
         const epMatch = linkText.match(/Episode\s*(\d+)/i) || href.match(/episode-(\d+)/i);
-        if (epMatch) {
+        if (epMatch && epMatch[1]) {
             seenUrls.add(href);
             const episodeNum = parseInt(epMatch[1], 10);
             const seasonMatch = linkText.match(/Season\s*(\d+)/i) || href.match(/season-(\d+)/i);
-            const seasonNum = seasonMatch ? parseInt(seasonMatch[1], 10) : 1;
+            const seasonNum = seasonMatch && seasonMatch[1] ? parseInt(seasonMatch[1], 10) : 1;
 
             videos.push({
                 id: encodeId(href),
-                title: linkText || `Episode ${episodeNum}`,
+                title: linkText || ("Episode " + episodeNum),
                 season: seasonNum,
                 episode: episodeNum,
                 released: new Date().toISOString()
@@ -120,10 +125,10 @@ async function getMeta(seriesId) {
         id: seriesId,
         type: "series",
         name: title,
-        poster,
+        poster: poster,
         background: poster,
-        description,
-        videos
+        description: description,
+        videos: videos
     };
 }
 
@@ -138,6 +143,7 @@ async function getStreams(episodeId) {
 
     while ((match = iframeRegex.exec(html)) !== null) {
         let src = match[1];
+        if (!src) continue;
         if (src.startsWith("//")) src = "https:" + src;
         if (/google|facebook|ads|doubleclick/i.test(src)) continue;
 
@@ -153,20 +159,20 @@ async function getStreams(episodeId) {
                     metaJson.videos.forEach((vid) => {
                         const videoUrl = vid.url.startsWith("//") ? "https:" + vid.url : vid.url;
                         streams.push({
-                            name: `Historical Point\n${vid.key || "HD"}`,
-                            title: `Direct Stream (${vid.key || "MP4"}) - Plays in Stremio`,
+                            name: "Historical Point\n" + (vid.key || "HD"),
+                            title: "Direct Stream (" + (vid.key || "MP4") + ") - Plays in Stremio",
                             url: videoUrl
                         });
                     });
                     index++;
                     continue;
                 }
-            } catch {}
+            } catch (e) {}
         }
 
         streams.push({
             name: "Historical Point",
-            title: `Server ${index} (Opens in Browser)`,
+            title: "Server " + index + " (Opens in Browser)",
             externalUrl: src
         });
         index++;
@@ -183,7 +189,7 @@ async function getStreams(episodeId) {
     return streams;
 }
 
-module.exports = async (req, res) => {
+module.exports = async function handler(req, res) {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Headers", "*");
     res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -192,8 +198,9 @@ module.exports = async (req, res) => {
         return res.status(200).end();
     }
 
-    const rawPath = (req.url || "/").split("?")[0];
-    const urlPath = decodeURIComponent(rawPath);
+    const fullUrl = req.url || "/";
+    const pathOnly = fullUrl.split("?")[0];
+    const urlPath = decodeURIComponent(pathOnly);
 
     try {
         if (urlPath === "/" || urlPath === "/api" || urlPath === "/api/index" || urlPath === "/manifest.json") {
@@ -202,19 +209,21 @@ module.exports = async (req, res) => {
 
         if (urlPath.includes("/catalog/series/hp_turkish_series")) {
             const metas = await getCatalog();
-            return res.status(200).json({ metas });
+            return res.status(200).json({ metas: metas });
         }
 
         if (urlPath.includes("/meta/series/")) {
-            const id = urlPath.split("/meta/series/")[1].replace(".json", "");
+            const parts = urlPath.split("/meta/series/");
+            const id = parts[1].replace(".json", "");
             const meta = await getMeta(id);
-            return res.status(200).json({ meta });
+            return res.status(200).json({ meta: meta });
         }
 
         if (urlPath.includes("/stream/series/")) {
-            const id = urlPath.split("/stream/series/")[1].replace(".json", "");
+            const parts = urlPath.split("/stream/series/");
+            const id = parts[1].replace(".json", "");
             const streams = await getStreams(id);
-            return res.status(200).json({ streams });
+            return res.status(200).json({ streams: streams });
         }
 
         return res.status(404).json({ error: "Not found", path: urlPath });
