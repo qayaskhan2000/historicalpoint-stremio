@@ -45,7 +45,7 @@ async function fetchHtml(url) {
 function getMetaTag(html, property) {
     const regex = new RegExp(`<meta[^>]+(?:property|name)=["']${property}["'][^>]+content=["']([^"']+)["']`, "i");
     const match = html.match(regex);
-    return match ? match : "";
+    return match ? match[1] : "";
 }
 
 async function getCatalog() {
@@ -81,7 +81,7 @@ async function getMeta(seriesId) {
     const html = await fetchHtml(seriesUrl);
 
     const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
-    const title = h1Match ? h1Match.replace(/<[^>]+>/g, "").trim() : "Series";
+    const title = h1Match ? h1Match[1].replace(/<[^>]+>/g, "").trim() : "Series";
     const poster = getMetaTag(html, "og:image");
     const description = getMetaTag(html, "og:description");
 
@@ -92,17 +92,17 @@ async function getMeta(seriesId) {
     let match;
 
     while ((match = linkRegex.exec(html)) !== null) {
-        const href = match;
-        const linkText = match.replace(/<[^>]+>/g, "").trim();
+        const href = match[1];
+        const linkText = match[2].replace(/<[^>]+>/g, "").trim();
 
         if (seenUrls.has(href)) continue;
 
         const epMatch = linkText.match(/Episode\s*(\d+)/i) || href.match(/episode-(\d+)/i);
         if (epMatch) {
             seenUrls.add(href);
-            const episodeNum = parseInt(epMatch, 10);
+            const episodeNum = parseInt(epMatch[1], 10);
             const seasonMatch = linkText.match(/Season\s*(\d+)/i) || href.match(/season-(\d+)/i);
-            const seasonNum = seasonMatch ? parseInt(seasonMatch, 10) : 1;
+            const seasonNum = seasonMatch ? parseInt(seasonMatch[1], 10) : 1;
 
             videos.push({
                 id: encodeId(href),
@@ -137,11 +137,10 @@ async function getStreams(episodeId) {
     let index = 1;
 
     while ((match = iframeRegex.exec(html)) !== null) {
-        let src = match;
+        let src = match[1];
         if (src.startsWith("//")) src = "https:" + src;
         if (/google|facebook|ads|doubleclick/i.test(src)) continue;
 
-        // Try resolving direct Mail.ru video links
         if (src.includes("mail.ru")) {
             try {
                 const metaUrl = src.replace("/video/embed/", "/+/video/meta/");
@@ -193,26 +192,27 @@ module.exports = async (req, res) => {
         return res.status(200).end();
     }
 
-    const urlPath = decodeURIComponent(req.url.split("?"));
+    const rawPath = (req.url || "/").split("?")[0];
+    const urlPath = decodeURIComponent(rawPath);
 
     try {
-        if (urlPath === "/" || urlPath === "/manifest.json") {
+        if (urlPath === "/" || urlPath === "/api" || urlPath === "/api/index" || urlPath === "/manifest.json") {
             return res.status(200).json(manifest);
         }
 
-        if (urlPath.startsWith("/catalog/series/hp_turkish_series")) {
+        if (urlPath.includes("/catalog/series/hp_turkish_series")) {
             const metas = await getCatalog();
             return res.status(200).json({ metas });
         }
 
-        if (urlPath.startsWith("/meta/series/")) {
-            const id = urlPath.replace("/meta/series/", "").replace(".json", "");
+        if (urlPath.includes("/meta/series/")) {
+            const id = urlPath.split("/meta/series/")[1].replace(".json", "");
             const meta = await getMeta(id);
             return res.status(200).json({ meta });
         }
 
-        if (urlPath.startsWith("/stream/series/")) {
-            const id = urlPath.replace("/stream/series/", "").replace(".json", "");
+        if (urlPath.includes("/stream/series/")) {
+            const id = urlPath.split("/stream/series/")[1].replace(".json", "");
             const streams = await getStreams(id);
             return res.status(200).json({ streams });
         }
