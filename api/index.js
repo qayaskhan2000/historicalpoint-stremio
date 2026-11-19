@@ -1,3 +1,5 @@
+const http = require("http");
+
 const BASE_URL = "https://historicalpoint.com";
 
 const SERIES_LIST = [
@@ -189,13 +191,15 @@ async function getStreams(episodeId) {
     return streams;
 }
 
-module.exports = async function handler(req, res) {
+const PORT = process.env.PORT || 3000;
+const server = http.createServer(async (req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Headers", "*");
     res.setHeader("Content-Type", "application/json; charset=utf-8");
 
     if (req.method === "OPTIONS") {
-        return res.status(200).end();
+        res.statusCode = 200;
+        return res.end();
     }
 
     const fullUrl = req.url || "/";
@@ -203,31 +207,41 @@ module.exports = async function handler(req, res) {
     const urlPath = decodeURIComponent(pathOnly);
 
     try {
-        if (urlPath === "/" || urlPath === "/api" || urlPath === "/api/index" || urlPath === "/manifest.json") {
-            return res.status(200).json(manifest);
+        if (urlPath === "/" || urlPath === "/manifest.json") {
+            res.statusCode = 200;
+            return res.end(JSON.stringify(manifest));
         }
 
         if (urlPath.includes("/catalog/series/hp_turkish_series")) {
             const metas = await getCatalog();
-            return res.status(200).json({ metas: metas });
+            res.statusCode = 200;
+            return res.end(JSON.stringify({ metas: metas }));
         }
 
         if (urlPath.includes("/meta/series/")) {
             const parts = urlPath.split("/meta/series/");
             const id = (parts.at(1) || "").replace(".json", "");
             const meta = await getMeta(id);
-            return res.status(200).json({ meta: meta });
+            res.statusCode = 200;
+            return res.end(JSON.stringify({ meta: meta }));
         }
 
         if (urlPath.includes("/stream/series/")) {
             const parts = urlPath.split("/stream/series/");
             const id = (parts.at(1) || "").replace(".json", "");
             const streams = await getStreams(id);
-            return res.status(200).json({ streams: streams });
+            res.statusCode = 200;
+            return res.end(JSON.stringify({ streams: streams }));
         }
 
-        return res.status(404).json({ error: "Not found", path: urlPath });
+        res.statusCode = 404;
+        return res.end(JSON.stringify({ error: "Not found", path: urlPath }));
     } catch (err) {
-        return res.status(500).json({ error: err.message });
+        res.statusCode = 500;
+        return res.end(JSON.stringify({ error: err.message }));
     }
-};
+});
+
+server.listen(PORT, () => {
+    console.log("Server running on port " + PORT);
+});
