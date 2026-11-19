@@ -234,7 +234,7 @@ const server = http.createServer(async (req, res) => {
             return res.end(JSON.stringify({ streams: streams }));
         }
 
-        res.statusCode = 404;
+            res.statusCode = 404;
         return res.end(JSON.stringify({ error: "Not found", path: urlPath }));
     } catch (err) {
         res.statusCode = 500;
@@ -245,3 +245,4 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
     console.log("Server running on port " + PORT);
 });
+  
