@@ -76,7 +76,7 @@ async function getCatalog() {
             const pageUrl = BASE_URL + "/" + series.slug + "/";
             try {
                 const html = await fetchHtml(pageUrl);
-                const poster = getMetaTag(html, "og:image");
+               const poster = extractPoster(html);
                 const description = getMetaTag(html, "og:description");
 
                 return {
@@ -104,7 +104,7 @@ async function getMeta(seriesId) {
 
     const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
     const title = h1Match ? (h1Match.at(1) || "").replace(/<[^>]+>/g, "").trim() : "Series";
-    const poster = getMetaTag(html, "og:image");
+    const poster = extractPoster(html);
     const description = getMetaTag(html, "og:description");
 
     const videos = [];
