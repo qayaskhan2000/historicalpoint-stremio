@@ -53,19 +53,16 @@ async function fetchHtml(url) {
 }
 
 function extractPoster(html) {
-    // 1. Try OpenGraph & Twitter meta tags (any attribute order)
     const metaMatch = html.match(/<meta[^>]+(?:og:image|twitter:image)[^>]+content=["']([^"']+)["']/i)
         || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:og:image|twitter:image)/i);
     if (metaMatch && metaMatch.at(1)) return metaMatch.at(1);
 
-    // 2. Fallback: Find the first WordPress upload image inside the post
     const imgMatch = html.match(/https?:\/\/historicalpoint\.com\/wp-content\/uploads\/[^"'\s)]+\.(?:jpg|jpeg|png|webp)/i);
     return imgMatch ? imgMatch.at(0) : "";
 }
 
-
-function getMetaTag(html, property) {
-    const regex = new RegExp("<meta[^>]+(?:property|name)=[\"']" + property + "[\"'][^>]+content=[\"']([^\"']+)[\"']", "i");
+function getMetaDescription(html) {
+    const regex = /<meta[^>]+(?:property|name)=["']og:description["'][^>]+content=["']([^"']+)["']/i;
     const match = html.match(regex);
     return match ? (match.at(1) || "") : "";
 }
@@ -76,8 +73,8 @@ async function getCatalog() {
             const pageUrl = BASE_URL + "/" + series.slug + "/";
             try {
                 const html = await fetchHtml(pageUrl);
-               const poster = extractPoster(html);
-                const description = getMetaTag(html, "og:description");
+                const poster = extractPoster(html);
+                const description = getMetaDescription(html);
 
                 return {
                     id: encodeId(pageUrl),
@@ -105,7 +102,7 @@ async function getMeta(seriesId) {
     const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
     const title = h1Match ? (h1Match.at(1) || "").replace(/<[^>]+>/g, "").trim() : "Series";
     const poster = extractPoster(html);
-    const description = getMetaTag(html, "og:description");
+    const description = getMetaDescription(html);
 
     const videos = [];
     const seenUrls = new Set();
@@ -153,22 +150,48 @@ async function getStreams(episodeId) {
     const episodeUrl = decodeId(episodeId);
     const html = await fetchHtml(episodeUrl);
     const streams = [];
+    const foundPlayers = new Set();
 
+    // 1. Collect all iframe URLs
     const iframeRegex = /<iframe[^>]+(?:src|data-src|data-lazy-src)=["']([^"']+)["']/gi;
     let match;
-    let index = 1;
-
     while ((match = iframeRegex.exec(html)) !== null) {
         let src = match.at(1);
         if (!src) continue;
         if (src.startsWith("//")) src = "https:" + src;
-        if (/google|facebook|ads|doubleclick/i.test(src)) continue;
+        if (!/google|facebook|ads|doubleclick|googletagmanager/i.test(src)) {
+            foundPlayers.add(src);
+        }
+    }
 
-        if (src.includes("mail.ru")) {
+    // 2. Scan raw HTML/scripts for hidden Mail.ru, Ok.ru, or direct .mp4/.m3u8 links
+    const rawUrlRegex = /https?:\/\/[^"'\s\\<>]+(?:mail\.ru\/video\/embed|ok\.ru\/videoembed|\.m3u8|\.mp4)[^"'\s\\<>]*/gi;
+    while ((match = rawUrlRegex.exec(html)) !== null) {
+        foundPlayers.add(match.at(0).replace(/\\\//g, "/"));
+    }
+
+    let index = 1;
+    for (const playerUrl of foundPlayers) {
+        // Direct .mp4 or .m3u8 link
+        if (/\.(?:mp4|m3u8)(?:\?|$)/i.test(playerUrl)) {
+            streams.push({
+                name: "Historical Point\nDirect",
+                title: "In-App Player " + index + " (HD)",
+                url: playerUrl
+            });
+            index++;
+            continue;
+        }
+
+        // Resolve Mail.ru embed to direct MP4 streams
+        if (playerUrl.includes("mail.ru")) {
             try {
-                const metaUrl = src.replace("/video/embed/", "/+/video/meta/");
+                const metaUrl = playerUrl.replace("/video/embed/", "/+/video/meta/");
                 const metaRes = await fetch(metaUrl, {
-                    headers: { Referer: "https://mail.ru" }
+                    headers: {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                        "Referer": "https://mail.ru"
+                    }
                 });
                 const metaJson = await metaRes.json();
 
@@ -178,8 +201,34 @@ async function getStreams(episodeId) {
                         streams.push({
                             name: "Historical Point\n" + (vid.key || "HD"),
                             title: "Direct Stream (" + (vid.key || "MP4") + ") - Plays in Stremio",
-                            url: videoUrl
+                            url: videoUrl,
+                            behaviorHints: {
+                                notWebReady: false,
+                                proxyHeaders: {
+                                    request: {
+                                        "Referer": "https://mail.ru",
+                                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                                    }
+                                }
+                            }
                         });
+                    });
+                    index++;
+                    continue;
+                }
+            } catch (e) {}
+        }
+
+        // Resolve Ok.ru embed to direct video streams
+        if (playerUrl.includes("ok.ru")) {
+            try {
+                const okRes = await fetchHtml(playerUrl);
+                const okMatches = okRes.match(/https?:\/\/[^"'\s\\]+(?:mp4|m3u8)[^"'\s\\]*/gi);
+                if (okMatches && okMatches.length > 0) {
+                    streams.push({
+                        name: "Historical Point\nOK.ru",
+                        title: "Direct Stream (In-App Player)",
+                        url: okMatches.at(0).replace(/\\u0026/g, "&")
                     });
                     index++;
                     continue;
@@ -190,7 +239,7 @@ async function getStreams(episodeId) {
         streams.push({
             name: "Historical Point",
             title: "Server " + index + " (Opens in Browser)",
-            externalUrl: src
+            externalUrl: playerUrl
         });
         index++;
     }
@@ -198,7 +247,7 @@ async function getStreams(episodeId) {
     if (streams.length === 0) {
         streams.push({
             name: "Historical Point",
-            title: "Watch on Historical Point (Browser)",
+            title: "Open Episode Page (No Direct Stream Found)",
             externalUrl: episodeUrl
         });
     }
@@ -222,42 +271,36 @@ const server = http.createServer(async (req, res) => {
     const urlPath = decodeURIComponent(pathOnly);
 
     try {
-        if (urlPath === "/" || urlPath === "/manifest.json") {
-            res.statusCode = 200;
-            return res.end(JSON.stringify(manifest));
-        }
-
-        if (urlPath.includes("/catalog/series/hp_turkish_series")) {
-            const metas = await getCatalog();
-            res.statusCode = 200;
-            return res.end(JSON.stringify({ metas: metas }));
-        }
-
-        if (urlPath.includes("/meta/series/")) {
-            const parts = urlPath.split("/meta/series/");
-            const id = (parts.at(1) || "").replace(".json", "");
-            const meta = await getMeta(id);
-            res.statusCode = 200;
-            return res.end(JSON.stringify({ meta: meta }));
-        }
-
-        if (urlPath.includes("/stream/series/")) {
-            const parts = urlPath.split("/stream/series/");
-            const id = (parts.at(1) || "").replace(".json", "");
-            const streams = await getStreams(id);
-            res.statusCode = 200;
-            return res.end(JSON.stringify({ streams: streams }));
-        }
-
-            res.statusCode = 404;
-        return res.end(JSON.stringify({ error: "Not found", path: urlPath }));
-    } catch (err) {
-        res.statusCode = 500;
-        return res.end(JSON.stringify({ error: err.message }));
-    }
+if (urlPath === "/" || urlPath === "/manifest.json") {
+res.statusCode = 200;
+return res.end(JSON.stringify(manifest));
+}
+if (urlPath.includes("/catalog/series/hp_turkish_series")) {
+const metas = await getCatalog();
+res.statusCode = 200;
+return res.end(JSON.stringify({ metas: metas }));
+}
+if (urlPath.includes("/meta/series/")) {
+const parts = urlPath.split("/meta/series/");
+const id = (parts.at(1) || "").replace(".json", "");
+const meta = await getMeta(id);
+res.statusCode = 200;
+return res.end(JSON.stringify({ meta: meta }));
+}
+if (urlPath.includes("/stream/series/")) {
+const parts = urlPath.split("/stream/series/");
+const id = (parts.at(1) || "").replace(".json", "");
+const streams = await getStreams(id);
+res.statusCode = 200;
+return res.end(JSON.stringify({ streams: streams }));
+}
+res.statusCode = 404;
+return res.end(JSON.stringify({ error: "Not found", path: urlPath }));
+} catch (err) {
+res.statusCode = 500;
+return res.end(JSON.stringify({ error: err.message }));
+}
 });
-
 server.listen(PORT, () => {
-    console.log("Server running on port " + PORT);
+console.log("Server running on port " + PORT);
 });
-  
