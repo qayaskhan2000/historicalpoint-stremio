@@ -43,11 +43,26 @@ function decodeId(id) {
 async function fetchHtml(url) {
     const res = await fetch(url, {
         headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://historicalpoint.com"
         }
     });
     return await res.text();
 }
+
+function extractPoster(html) {
+    // 1. Try OpenGraph & Twitter meta tags (any attribute order)
+    const metaMatch = html.match(/<meta[^>]+(?:og:image|twitter:image)[^>]+content=["']([^"']+)["']/i)
+        || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:og:image|twitter:image)/i);
+    if (metaMatch && metaMatch.at(1)) return metaMatch.at(1);
+
+    // 2. Fallback: Find the first WordPress upload image inside the post
+    const imgMatch = html.match(/https?:\/\/historicalpoint\.com\/wp-content\/uploads\/[^"'\s)]+\.(?:jpg|jpeg|png|webp)/i);
+    return imgMatch ? imgMatch.at(0) : "";
+}
+
 
 function getMetaTag(html, property) {
     const regex = new RegExp("<meta[^>]+(?:property|name)=[\"']" + property + "[\"'][^>]+content=[\"']([^\"']+)[\"']", "i");
